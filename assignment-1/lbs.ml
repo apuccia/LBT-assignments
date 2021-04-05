@@ -1,4 +1,13 @@
-module SSet = Set.Make(String);;
+(*  This type defines the possible permissions that can be used in the language  *)
+type perm =
+  | Write 
+  | Read
+  | P1
+  | P2
+  | P3
+  | P4;;
+
+module PSet = Set.Make(struct type t = perm let compare = compare end);;
 
 type expr =
  | CstI of int
@@ -8,10 +17,10 @@ type expr =
  | Prim of string * expr * expr
  | If of expr * expr * expr
  (* Modified Fun construct in order to specify the set of permissions *)
- | Fun of string * expr * SSet.t
+ | Fun of string * expr * PSet.t
  | Call of expr * expr
  (* Added new construct to check that a given set of permissions are enabled *)
- | DemandPerm of SSet.t * expr;;
+ | DemandPerm of PSet.t * expr;;
 
 (* 
   An environment is a map from identifier to a value (what the identifier is bound to).
@@ -30,10 +39,10 @@ let rec lookup env x =
  
 type value =
  | Int of int
- | Closure of string * expr * SSet.t * value env;;
+ | Closure of string * expr * PSet.t * value env;;
 
-(* val eval : expr -> value env -> SSet.t -> value = <fun> *)
-let rec eval (e : expr) (env : value env) (permDom : SSet.t) =
+(* val eval : expr -> value env -> PSet.t -> value = <fun> *)
+let rec eval (e : expr) (env : value env) (permDom : PSet.t) =
   match e with
     | CstI i -> Int i
     | CstB b -> Int (if b then 1 else 0)
@@ -71,17 +80,17 @@ let rec eval (e : expr) (env : value env) (permDom : SSet.t) =
               let xVal = eval eArg env permDom in
                 let fBodyEnv = (x, xVal) :: fDeclEnv
                   (*  Compute intersection between function permissions and actual permissions  *)
-                  in eval fBody fBodyEnv (SSet.inter permDom fPerm)
+                  in eval fBody fBodyEnv (PSet.inter permDom fPerm)
             | _ -> failwith "eval Call: not a function"
         end
     | DemandPerm(demPerm, exp) ->
       (*  
         Check that the permissions demanded can be granted (e.g if they are a subset of the actual permissions)
       *)
-      if SSet.subset demPerm permDom then
+      if PSet.subset demPerm permDom then
         eval exp env permDom
       else
-        failwith ("permissions missing: " ^ (String.concat ", " (SSet.elements (SSet.diff demPerm permDom))));;
+        failwith ("permissions missing");;
    
 (****** Examples ******)
 
@@ -91,20 +100,20 @@ let emptyEnv = [];;
   Inherited access rights are only "read" but a function that requires "write" access is called
 *)
 
-let contextPermissions = List.fold_right SSet.add ["read"] SSet.empty;;
+let contextPermissions = List.fold_right PSet.add [Read] PSet.empty;;
 
 eval (Let("inc", 
-      Fun("x", DemandPerm(SSet.singleton "write", Prim("+", Var("x"), CstI(1))), SSet.singleton "write"), 
+      Fun("x", DemandPerm(PSet.singleton Write, Prim("+", Var("x"), CstI(1))), PSet.singleton Write), 
       Call(Var("inc"), CstI(3)))) emptyEnv contextPermissions;;
 
 (*
   Inherited access rights are empty but a function that requires "write" access is called
 *)
 
-let contextPermissions = SSet.empty;;
+let contextPermissions = PSet.empty;;
       
 eval (Let("inc", 
-      Fun("x", DemandPerm(SSet.singleton "write", Prim("+", Var("x"), CstI(1))), SSet.singleton "write"), 
+      Fun("x", DemandPerm(PSet.singleton Write, Prim("+", Var("x"), CstI(1))), PSet.singleton Write), 
       Call(Var("inc"), CstI(3)))) emptyEnv contextPermissions;;
 
 (*
@@ -112,16 +121,16 @@ eval (Let("inc",
   function B that have no permissions.
 *)
 
-let contextPermissions = List.fold_right SSet.add ["read"] SSet.empty;;
+let contextPermissions = List.fold_right PSet.add [Read] PSet.empty;;
 
 eval (Let("A", 
           Fun("x", 
-              DemandPerm(SSet.singleton "read", Prim("+", Var("x"), CstI(1))), 
-              SSet.singleton "read"), 
+              DemandPerm(PSet.singleton Read, Prim("+", Var("x"), CstI(1))), 
+              PSet.singleton Read), 
           Let("B",
               Fun("y", 
                   Prim("*", Var("y"), Call(Var("A"), CstI(3))),
-                  SSet.empty),
+                  PSet.empty),
               Call(Var("B"), CstI(3))))) emptyEnv contextPermissions;;
 
 (*
@@ -129,13 +138,13 @@ eval (Let("A",
   function B that have both permissions.
 *)
 
-let contextPermissions = List.fold_right SSet.add ["read"] SSet.empty;;
-let bPerm = List.fold_right SSet.add ["read"; "write"] SSet.empty;;
+let contextPermissions = List.fold_right PSet.add [Read] PSet.empty;;
+let bPerm = List.fold_right PSet.add [Read; Write] PSet.empty;;
 
 eval (Let("A", 
           Fun("x", 
-              DemandPerm(SSet.singleton "read", Prim("+", Var("x"), CstI(1))), 
-              SSet.singleton "read"), 
+              DemandPerm(PSet.singleton Read, Prim("+", Var("x"), CstI(1))), 
+              PSet.singleton Read), 
           Let("B",
               Fun("y", 
                   Prim("*", Var("y"), Call(Var("A"), CstI(3))),
@@ -147,14 +156,14 @@ eval (Let("A",
   function PD3 then checks for permission "P1" but function PD1 does not have it
 *)
 
-let contextPermissions = List.fold_right SSet.add ["P1"; "P2"; "P3"; "P4"] SSet.empty;;
-let pd1Perm = List.fold_right SSet.add ["P2"; "P4"] SSet.empty;;
-let pd2Perm = List.fold_right SSet.add ["P1"; "P2";] SSet.empty;;
-let pd3Perm = List.fold_right SSet.add ["P1"; "P2"; "P3";] SSet.empty;;
+let contextPermissions = List.fold_right PSet.add [P1; P2; P3; P4] PSet.empty;;
+let pd1Perm = List.fold_right PSet.add [P2; P4] PSet.empty;;
+let pd2Perm = List.fold_right PSet.add [P1; P2;] PSet.empty;;
+let pd3Perm = List.fold_right PSet.add [P1; P2; P3;] PSet.empty;;
 
 eval (Let("PD3", 
           Fun("x", 
-              DemandPerm(SSet.singleton "P1", Prim("+", Var("x"), CstI(1))),
+              DemandPerm(PSet.singleton P1, Prim("+", Var("x"), CstI(1))),
               pd3Perm), 
           Let("PD2", 
               Fun("x", 
@@ -172,11 +181,11 @@ eval (Let("PD3",
   and function PD2 does not have "P3"
 *)
 
-let pd1Perm = List.fold_right SSet.add ["P2"; "P4"] SSet.empty;;
-let pd2Perm = List.fold_right SSet.add ["P1"; "P2";] SSet.empty;;
-let pd3Perm = List.fold_right SSet.add ["P1"; "P2"; "P3";] SSet.empty;;
+let pd1Perm = List.fold_right PSet.add [P2; P4] PSet.empty;;
+let pd2Perm = List.fold_right PSet.add [P1; P2;] PSet.empty;;
+let pd3Perm = List.fold_right PSet.add [P1; P2; P3;] PSet.empty;;
 
-let pd2DemPerm = List.fold_right SSet.add ["P1"; "P3"] SSet.empty;;
+let pd2DemPerm = List.fold_right PSet.add [P1; P3] PSet.empty;;
 eval (Let("PD3", 
           Fun("x", 
               DemandPerm(pd2DemPerm, Prim("+", Var("x"), CstI(1))),
@@ -197,11 +206,11 @@ eval (Let("PD3",
   function PD3 then checks for permission "P1" and "P3" but function PD1 and PD2 does not have "P3"
 *)
 
-let pd1Perm = List.fold_right SSet.add ["P1"; "P2"; "P4"] SSet.empty;;
-let pd2Perm = List.fold_right SSet.add ["P1"; "P2";] SSet.empty;;
-let pd3Perm = List.fold_right SSet.add ["P1"; "P2"; "P3";] SSet.empty;;
+let pd1Perm = List.fold_right PSet.add [P1; P2; P4] PSet.empty;;
+let pd2Perm = List.fold_right PSet.add [P1; P2;] PSet.empty;;
+let pd3Perm = List.fold_right PSet.add [P1; P2; P3;] PSet.empty;;
 
-let pd2DemPerm = List.fold_right SSet.add ["P1"; "P3"] SSet.empty;;
+let pd2DemPerm = List.fold_right PSet.add [P1; P3] PSet.empty;;
 eval (Let("PD3", 
           Fun("x", 
               DemandPerm(pd2DemPerm, Prim("+", Var("x"), CstI(1))),
